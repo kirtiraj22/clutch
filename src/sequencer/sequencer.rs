@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Duration, interval};
 use tracing::{error, info};
 
 use crate::mempool::Mempool;
+use crate::metrics::Metrics;
 use crate::runtime::Runtime;
 use crate::state::StateManager;
 use crate::storage::{self, Store};
@@ -41,6 +42,7 @@ pub struct Sequencer {
     latest_batch: Arc<RwLock<Option<L2Batch>>>,
     batch_tx: mpsc::Sender<L2Batch>,
     receipts: Arc<RwLock<Vec<TxReceipt>>>,
+    metrics: Arc<Metrics>,
 }
 
 impl Sequencer {
@@ -51,9 +53,9 @@ impl Sequencer {
         state: Arc<StateManager>,
         store: Store,
         receipts: Arc<RwLock<Vec<TxReceipt>>>,
+        metrics: Arc<Metrics>,
     ) -> (Self, mpsc::Receiver<L2Batch>) {
         let (batch_tx, batch_rx) = mpsc::channel(32);
-
         let seq = Self {
             config,
             mempool,
@@ -65,8 +67,8 @@ impl Sequencer {
             latest_batch: Arc::new(RwLock::new(None)),
             batch_tx,
             receipts,
+            metrics,
         };
-
         (seq, batch_rx)
     }
 
@@ -77,9 +79,7 @@ impl Sequencer {
             blocks_per_batch = self.config.blocks_per_batch,
             "sequencer started"
         );
-
         let mut ticker = interval(Duration::from_secs(self.config.block_interval_secs));
-
         loop {
             ticker.tick().await;
             if let Err(e) = self.produce_block().await {
@@ -91,7 +91,7 @@ impl Sequencer {
     async fn produce_block(&self) -> anyhow::Result<()> {
         let txs = self.mempool.drain(self.config.max_txs_per_block).await;
         if txs.is_empty() {
-            return Ok(()); // nothing to do this tick
+            return Ok(());
         }
 
         let block_number = self.next_block_number().await?;
@@ -102,13 +102,12 @@ impl Sequencer {
         let header = BlockHeader {
             number: block_number,
             parent_hash,
-            state_root: state_root.clone(),
+            state_root,
             tx_root,
             timestamp: chrono::Utc::now(),
             sequencer: self.config.sequencer_id.clone(),
         };
 
-        // Execute every transaction, collecting receipts.
         let block_hash = header.hash();
         let mut executed_txs = Vec::with_capacity(txs.len());
         let mut new_receipts = Vec::with_capacity(txs.len());
@@ -119,21 +118,22 @@ impl Sequencer {
                 .execute(&tx, block_number, &block_hash, i)
                 .await;
 
-            tx.status = if receipt.success {
-                crate::types::TxStatus::Executed
+            if receipt.success {
+                self.metrics.inc_txs_executed();
+                tx.status = crate::types::TxStatus::Executed;
             } else {
-                crate::types::TxStatus::Failed(receipt.error.clone().unwrap_or_default())
-            };
+                self.metrics.inc_txs_failed();
+                tx.status =
+                    crate::types::TxStatus::Failed(receipt.error.clone().unwrap_or_default());
+            }
 
-            // Persist receipt.
-            self.store
-                .put(storage::receipt_key(&tx.id), &receipt)?;
-
+            self.store.put(storage::receipt_key(&tx.id), &receipt).await?;
             new_receipts.push(receipt);
             executed_txs.push(tx);
         }
 
         let block = L2Block::new(header, executed_txs);
+        self.metrics.inc_blocks_produced();
 
         info!(
             block = block_number,
@@ -142,17 +142,13 @@ impl Sequencer {
             "block sealed"
         );
 
-        // Persist block.
-        self.store.put(storage::block_key(block_number), &block)?;
-        self.store
-            .put(storage::BLOCK_HEIGHT_KEY, &block_number)?;
+        self.store.put(storage::block_key(block_number), &block).await?;
+        self.store.put(storage::BLOCK_HEIGHT_KEY, &block_number).await?;
 
-        // Update hot state.
         *self.latest_block.write().await = Some(block.clone());
         self.receipts.write().await.extend(new_receipts);
         self.pending_blocks.write().await.push(block);
 
-        // Maybe flush a batch.
         if self.pending_blocks.read().await.len() >= self.config.blocks_per_batch {
             self.flush_batch().await?;
         }
@@ -163,10 +159,8 @@ impl Sequencer {
     async fn flush_batch(&self) -> anyhow::Result<()> {
         let blocks: Vec<L2Block> = self.pending_blocks.write().await.drain(..).collect();
         let batch_number = self.next_batch_number().await?;
-
-        // Serialise for size accounting.
         let raw = bincode::serialize(&blocks)?;
-        let compressed_bytes = raw.len(); // compression is in the batch submitter
+        let compressed_bytes = raw.len();
 
         let batch = L2Batch::new(batch_number, blocks, compressed_bytes);
 
@@ -177,8 +171,8 @@ impl Sequencer {
             "batch sealed — sending to L1 submitter"
         );
 
-        self.store.put(storage::batch_key(batch_number), &batch)?;
-        self.store.put(storage::BATCH_NUMBER_KEY, &batch_number)?;
+        self.store.put(storage::batch_key(batch_number), &batch).await?;
+        self.store.put(storage::BATCH_NUMBER_KEY, &batch_number).await?;
         *self.latest_batch.write().await = Some(batch.clone());
 
         self.batch_tx
@@ -198,43 +192,65 @@ impl Sequencer {
     }
 
     pub async fn recent_blocks(&self, limit: usize) -> Vec<L2Block> {
-        let height = match self.store.get::<u64>(storage::BLOCK_HEIGHT_KEY) {
-            Ok(Some(h)) => h,
-            _ => return vec![],
-        };
+    let height = match self.store.get::<u64>(storage::BLOCK_HEIGHT_KEY).await {
+        Ok(Some(h)) => h,
+        _ => return vec![],
+    };
 
-        let start = height.saturating_sub(limit as u64 - 1);
-        (start..=height)
-            .filter_map(|n| self.store.get::<L2Block>(storage::block_key(n)).ok().flatten())
-            .collect()
+    let start = height.saturating_sub(limit as u64 - 1);
+
+    let mut blocks = Vec::new();
+
+    for n in start..=height {
+        if let Ok(Some(block)) = self
+            .store
+            .get::<L2Block>(storage::block_key(n))
+            .await
+        {
+            blocks.push(block);
+        }
     }
+
+    blocks
+}
 
     pub async fn recent_batches(&self, limit: usize) -> Vec<L2Batch> {
-        let number = match self.store.get::<u64>(storage::BATCH_NUMBER_KEY) {
-            Ok(Some(n)) => n,
-            _ => return vec![],
-        };
+    let number = match self.store.get::<u64>(storage::BATCH_NUMBER_KEY).await {
+        Ok(Some(n)) => n,
+        _ => return vec![],
+    };
 
-        let start = number.saturating_sub(limit as u64 - 1);
-        (start..=number)
-            .filter_map(|n| self.store.get::<L2Batch>(storage::batch_key(n)).ok().flatten())
-            .collect()
+    let start = number.saturating_sub(limit as u64 - 1);
+
+    let mut batches = Vec::new();
+
+    for n in start..=number {
+        if let Ok(Some(batch)) = self
+            .store
+            .get::<L2Batch>(storage::batch_key(n))
+            .await
+        {
+            batches.push(batch);
+        }
     }
 
+    batches
+}
+
     async fn next_block_number(&self) -> anyhow::Result<u64> {
-        let current = self
+        Ok(self
             .store
-            .get::<u64>(storage::BLOCK_HEIGHT_KEY)?
-            .unwrap_or(0);
-        Ok(current + 1)
+            .get::<u64>(storage::BLOCK_HEIGHT_KEY).await?
+            .unwrap_or(0)
+            + 1)
     }
 
     async fn next_batch_number(&self) -> anyhow::Result<u64> {
-        let current = self
+        Ok(self
             .store
-            .get::<u64>(storage::BATCH_NUMBER_KEY)?
-            .unwrap_or(0);
-        Ok(current + 1)
+            .get::<u64>(storage::BATCH_NUMBER_KEY).await?
+            .unwrap_or(0)
+            + 1)
     }
 
     async fn parent_hash(&self) -> String {
