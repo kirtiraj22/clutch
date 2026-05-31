@@ -17,9 +17,9 @@ pub struct StateManager {
 }
 
 impl StateManager {
-    pub fn new(store: Store) -> Result<Self, ClutchError> {
+    pub async fn new(store: Store) -> Result<Self, ClutchError> {
         let state_root = store
-            .get::<String>(storage::STATE_ROOT_KEY)?
+            .get::<String>(storage::STATE_ROOT_KEY).await?
             .unwrap_or_else(|| "0".repeat(64));
 
         Ok(Self {
@@ -40,7 +40,7 @@ impl StateManager {
         }
 
         let db_key = storage::account_key(&key_str);
-        if let Ok(Some(acct)) = self.store.get::<L2Account>(&db_key) {
+        if let Ok(Some(acct)) = self.store.get::<L2Account>(&db_key).await {
             debug!("storage hit");
             self.cache.write().await.insert(key_str, acct.clone());
             return Some(acct);
@@ -54,8 +54,9 @@ impl StateManager {
         self.get_account(pubkey).await.map(|a| a.nonce).unwrap_or(0)
     }
 
-    pub fn get_state_root(&self) -> String {
-        self.state_root.blocking_read().clone()
+    pub async fn get_state_root(&self) -> String {
+        // self.state_root.blocking_read().clone()
+        self.state_root.read().await.clone()
     }
 
     pub async fn get_state_root_async(&self) -> String {
@@ -67,7 +68,7 @@ impl StateManager {
         let key_str = pubkey.to_string();
 
         self.cache.write().await.insert(key_str.clone(), account.clone());
-        self.store.put(storage::account_key(&key_str), &account)?;
+        self.store.put(storage::account_key(&key_str), &account).await?;
 
         debug!(lamports = account.lamports, nonce = account.nonce, "account updated");
 
@@ -106,7 +107,7 @@ impl StateManager {
 
         let root_hex = hex::encode(root);
         *self.state_root.write().await = root_hex.clone();
-        self.store.put(storage::STATE_ROOT_KEY, &root_hex)?;
+        self.store.put(storage::STATE_ROOT_KEY, &root_hex).await?;
 
         debug!(root = %root_hex, accounts = entries.len(), "state root updated");
         Ok(())
