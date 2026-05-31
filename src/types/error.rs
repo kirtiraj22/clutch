@@ -42,12 +42,6 @@ pub enum ClutchError {
     InvalidEncoding(String),
 }
 
-impl From<rocksdb::Error> for ClutchError {
-    fn from(e: rocksdb::Error) -> Self {
-        ClutchError::Storage(e.to_string())
-    }
-}
-
 impl From<bincode::Error> for ClutchError {
     fn from(e: bincode::Error) -> Self {
         ClutchError::Serialization(e.to_string())

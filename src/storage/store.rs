@@ -1,51 +1,71 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+};
 
-use rocksdb::{Options, DB};
 use serde::{de::DeserializeOwned, Serialize};
+use tokio::sync::RwLock;
 
 use crate::types::ClutchError;
 
 #[derive(Clone)]
 pub struct Store {
-    db: Arc<DB>,
+    inner: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
 }
 
 impl Store {
-    pub fn open(path: &str) -> Result<Self, ClutchError> {
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
-
-        let db = DB::open(&opts, path)?;
-        Ok(Self { db: Arc::new(db) })
+    pub fn open(_path: &str) -> Result<Self, ClutchError> {
+        Ok(Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+        })
     }
-    pub fn put<V: Serialize>(&self, key: impl AsRef<[u8]>, value: &V) -> Result<(), ClutchError> {
+
+    pub async fn put<V: Serialize>(
+        &self,
+        key: impl AsRef<[u8]>,
+        value: &V,
+    ) -> Result<(), ClutchError> {
         let bytes = bincode::serialize(value)?;
-        self.db.put(key, bytes)?;
+        self.inner
+            .write()
+            .await
+            .insert(key.as_ref().to_vec(), bytes);
+
         Ok(())
     }
 
-    pub fn get<V: DeserializeOwned>(&self, key: impl AsRef<[u8]>) -> Result<Option<V>, ClutchError> {
-        match self.db.get(key)? {
-            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+    pub async fn get<V: DeserializeOwned>(
+        &self,
+        key: impl AsRef<[u8]>,
+    ) -> Result<Option<V>, ClutchError> {
+        let map = self.inner.read().await;
+
+        match map.get(key.as_ref()) {
+            Some(bytes) => Ok(Some(bincode::deserialize(bytes)?)),
             None => Ok(None),
         }
     }
-    pub fn delete(&self, key: impl AsRef<[u8]>) -> Result<(), ClutchError> {
-        self.db.delete(key)?;
+
+    pub async fn delete(
+        &self,
+        key: impl AsRef<[u8]>,
+    ) -> Result<(), ClutchError> {
+        self.inner.write().await.remove(key.as_ref());
         Ok(())
     }
 
-    pub fn scan_prefix<V: DeserializeOwned>(&self, prefix: &[u8]) -> Vec<V> {
-        self.db
-            .iterator(rocksdb::IteratorMode::From(prefix, rocksdb::Direction::Forward))
-            .filter_map(|r| r.ok())
-            .take_while(|(k, _)| k.starts_with(prefix))
-            .filter_map(|(_, v)| bincode::deserialize::<V>(&v).ok())
+    pub async fn scan_prefix<V: DeserializeOwned>(
+        &self,
+        prefix: &[u8],
+    ) -> Vec<V> {
+        let map = self.inner.read().await;
+
+        map.iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .filter_map(|(_, v)| bincode::deserialize::<V>(v).ok())
             .collect()
     }
 }
-
 
 pub fn account_key(pubkey: &str) -> Vec<u8> {
     format!("acct:{pubkey}").into_bytes()
