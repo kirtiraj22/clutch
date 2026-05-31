@@ -1,128 +1,283 @@
 # Clutch
 
-**An educational optimistic rollup execution engine on Solana.**
+Clutch is an optimistic rollup implementation built on top of Solana.
 
-Clutch is a complete, runnable L2 rollup prototype built in Rust with a production-grade Next.js frontend. It demonstrates the core concepts of an optimistic rollup — off-chain execution, Merkle state commitments, batch sequencing, and L1 settlement — without the production complexity of fraud proofs or decentralised consensus.
+It demonstrates the core architecture behind modern rollup systems:
+
+* off-chain transaction execution,
+* deterministic state transitions,
+* block production,
+* state commitments,
+* batching,
+* and L1 settlement.
+
+The project is designed to make rollup internals understandable and runnable in a single Rust codebase.
 
 ---
 
-## Architecture
+# Overview
 
-```
+Traditional blockchains execute every transaction directly on the base layer.
+
+Rollups take a different approach:
+
+* transactions execute on an L2,
+* the L2 maintains its own state and block production,
+* and batches of compressed transaction data are periodically anchored to the L1.
+
+This significantly reduces the amount of work performed on the base chain while preserving verifiability.
+
+Clutch follows the optimistic rollup model:
+
+* execution happens off-chain,
+* state roots are computed deterministically,
+* and batches can be replayed and verified independently.
+
+---
+
+# Architecture
+
+```text
 Client / Wallet
-      │  JSON-RPC (Solana-compatible)
-      ▼
-   Mempool          dedup · cap · FIFO
-      │  drain every N seconds
-      ▼
-  Sequencer         block production · timestamps · parent hashes
-      │  execute
-      ▼
-  Runtime           Transfer · Mint · Burn · CustomInstruction
-      │  write-through
-      ▼
- StateManager        write-through cache → RocksDB
-                     SHA-256 Merkle state root
-      │  batch every M blocks
-      ▼
-BatchSubmitter       bincode encode → Solana instruction → L1
-      │
-      ▼
-  Solana (L1)        data availability · challenge window
+       │
+       ▼
+JSON-RPC Server
+       │
+       ▼
+Mempool
+(deduplication + staging)
+       │
+       ▼
+Sequencer
+(block production)
+       │
+       ▼
+Runtime
+(transaction execution)
+       │
+       ▼
+State Manager
+(account state + state root)
+       │
+       ▼
+Batching Layer
+(batch formation)
+       │
+       ▼
+Solana L1
+(settlement + data availability)
 ```
 
 ---
 
-## Project Structure
+# Core Components
 
-```
-clutch/                     Rust backend
-  src/
-    main.rs                 CLI + wiring
-    genesis.rs              First-boot state seeding
-    metrics.rs              Atomic counters
-    types/                  All domain types
-      error.rs              ClutchError (thiserror)
-      transaction.rs        TransactionKind enum
-      block.rs              L2Block + BlockHeader
-      batch.rs              L2Batch + BatchMeta
-      account.rs            L2Account
-      receipt.rs            TxReceipt
-    storage/                RocksDB abstraction
-    state/                  Merkle-rooted StateManager
-    mempool/                Pending tx queue
-    runtime/                Execution engine
-    sequencer/              Block production + batching
-    batch/                  L1 submission
-    rpc/                    JSON-RPC server + decoder
-  config/
-    default.toml            Default node config
-  scripts/
-    demo.sh                 Full interactive demo
-    send_transfer.ts        TypeScript tx submission
+## JSON-RPC Server
 
+Clutch exposes a Solana-inspired JSON-RPC interface for:
+
+* transaction submission,
+* account queries,
+* block inspection,
+* and node metrics.
+
+---
+
+## Mempool
+
+The mempool temporarily stores incoming transactions before sequencing.
+
+Responsibilities:
+
+* transaction deduplication,
+* capacity management,
+* pending transaction tracking.
+
+---
+
+## Sequencer
+
+The sequencer periodically:
+
+* drains the mempool,
+* executes transactions,
+* produces L2 blocks,
+* and groups blocks into batches.
+
+Each block contains:
+
+* block number,
+* parent hash,
+* transaction data,
+* timestamp,
+* and resulting state root.
+
+---
+
+## Runtime
+
+The runtime is responsible for deterministic transaction execution.
+
+Supported instruction types:
+
+* Transfer
+* Mint
+* Burn
+* CustomInstruction
+
+Execution flow:
+
+1. Validate transaction
+2. Execute state transition
+3. Update state root
+4. Generate receipt
+
+---
+
+## State Manager
+
+The state manager maintains the canonical L2 world state.
+
+Every account mutation contributes to a deterministic global state root.
+
+The state root acts as a cryptographic commitment to the entire chain state.
+
+---
+
+## Batch Submitter
+
+The batching layer aggregates multiple blocks together and submits batch data to Solana.
+
+This models how optimistic rollups amortise settlement costs across many transactions.
+
+---
+
+# Project Structure
+
+```text
+src/
+├── batch/          L1 batch submission
+├── genesis/        Initial chain state
+├── mempool/        Transaction staging
+├── metrics/        Runtime metrics
+├── rpc/            JSON-RPC server
+├── runtime/        Execution engine
+├── sequencer/      Block production
+├── state/          State manager
+├── storage/        Persistence layer
+├── types/          Core domain types
+└── main.rs         Node bootstrap
 ```
 
 ---
 
-## Quick Start
+# Running the Node
 
-### Backend
+## Prerequisites
+
+* Rust stable
+* Cargo
+
+Install Rust:
 
 ```bash
-# Prerequisites: Rust stable (https://rustup.rs)
-cd clutch
-
-# Build
-cargo build --release
-
-# Run (defaults: port 8899, DB ./clutch_db, devnet L1)
-cargo run --release
-
-# Or with custom config
-cargo run --release -- \
-  --port 8899 \
-  --db-path ./clutch_db \
-  --solana-rpc https://api.devnet.solana.com \
-  --block-interval-secs 2 \
-  --blocks-per-batch 5
+curl https://sh.rustup.rs -sSf | sh
 ```
-
-Set `RUST_LOG=debug` for verbose output, `RUST_LOG=clutch::sequencer=trace` for sequencer traces.
-
-## RPC Reference
-
-### Solana-compatible
-
-| Method | Description |
-|---|---|
-| `getBalance` | L2 lamport balance |
-| `getAccountInfo` | Full account data |
-| `sendTransaction` | Submit a signed transaction |
-| `getLatestBlockhash` | For transaction construction |
-| `simulateTransaction` | Dry-run |
-| `getTransaction` | Receipt by signature |
-
-### Clutch-native
-
-| Method | Description |
-|---|---|
-| `clutch_getChainStatus` | Height, batch count, state root, pending count |
-| `clutch_getLatestBlock` | Most recent L2 block |
-| `clutch_getLatestBatch` | Most recent L1 batch |
-| `clutch_getRecentBlocks` | Last N blocks |
-| `clutch_getRecentBatches` | Last N batches |
-| `clutch_getPendingTxs` | Mempool contents |
-| `clutch_getTransactionReceipt` | Execution receipt with logs |
-| `clutch_getMetrics` | Node metrics snapshot |
 
 ---
 
-## Instruction Set
+## Build
 
-| Instruction | Description |
-|---|---|
-| `Transfer { to, lamports }` | Move lamports between accounts |
-| `Mint { to, lamports }` | Credit tokens (authority-gated) |
-| `Burn { lamports }` | Destroy **tokens** from signer |
-| `CustomInstruction { program_id, data }` | Extensibility hook |
+```bash
+cargo build --release
+```
+
+---
+
+## Run
+
+```bash
+RUST_LOG=info cargo run --release
+```
+
+Default RPC endpoint:
+
+```text
+http://localhost:8899
+```
+
+---
+
+# Example RPC Calls
+
+## Chain Status
+
+```bash
+curl -X POST http://localhost:8899 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":1,
+    "method":"clutch_getChainStatus",
+    "params":[]
+  }'
+```
+
+---
+
+## Latest Block
+
+```bash
+curl -X POST http://localhost:8899 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":1,
+    "method":"clutch_getLatestBlock",
+    "params":[]
+  }'
+```
+
+---
+
+## Metrics
+
+```bash
+curl -X POST http://localhost:8899 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":1,
+    "method":"clutch_getMetrics",
+    "params":[]
+  }'
+```
+
+---
+
+# Current Scope
+
+Clutch is intentionally simplified for educational purposes.
+
+The current implementation focuses on:
+
+* execution flow,
+* sequencing,
+* state commitments,
+* batching,
+* and settlement architecture.
+
+It does not yet implement:
+
+* fraud proofs,
+* decentralised sequencing,
+* validator consensus,
+* or bridge contracts.
+
+---
+
+# Why This Project Exists
+
+Most rollup discussions stay theoretical.
+
+Clutch was built to make rollup internals inspectable and understandable through a runnable system that mirrors real optimistic rollup architecture at a smaller scale.
