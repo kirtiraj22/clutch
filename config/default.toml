@@ -1,0 +1,38 @@
+# Clutch Rollup Node — Default Configuration
+# All values here can be overridden via CLI flags.
+
+[node]
+# JSON-RPC listen port
+port = 8899
+
+# RocksDB data directory (relative to CWD)
+db_path = "./clutch_db"
+
+# Human-readable name shown in block headers
+sequencer_id = "clutch-sequencer-0"
+
+[l1]
+# Solana RPC endpoint to post batches to
+rpc_url = "https://api.devnet.solana.com"
+
+[sequencer]
+# How often (seconds) the sequencer tries to seal a block.
+# Lower = faster finality, higher = better throughput per block.
+block_interval_secs = 2
+
+# Maximum transactions included in a single L2 block.
+max_txs_per_block = 100
+
+# How many L2 blocks accumulate before the batch is posted to L1.
+# block_interval_secs * blocks_per_batch = batch posting cadence.
+# e.g. 2s * 5 = batch every ~10 seconds.
+blocks_per_batch = 5
+
+[mempool]
+# Hard cap on the number of pending transactions.
+max_pending = 10000
+
+[logging]
+# RUST_LOG-style filter. Override with the RUST_LOG env variable.
+# Examples: "info", "clutch=debug", "clutch::sequencer=trace"
+level = "info"
