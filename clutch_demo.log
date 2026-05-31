@@ -1,0 +1,17 @@
+[2m2026-05-31T16:52:14.396443Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m starting Clutch rollup node [3mport[0m[2m=[0m8899 [3mdb[0m[2m=[0m./demo_db [3msolana_rpc[0m[2m=[0mhttps://api.devnet.solana.com
+[2m2026-05-31T16:52:14.410967Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m storage opened at ./demo_db
+[2m2026-05-31T16:52:14.414748Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m state manager initialised (state root = 0000000000000000000000000000000000000000000000000000000000000000)
+[2m2026-05-31T16:52:14.430827Z[0m [32m INFO[0m [2mclutch::genesis[0m[2m:[0m seeding genesis state
+[2m2026-05-31T16:52:14.440201Z[0m [32m INFO[0m [2mclutch::genesis[0m[2m:[0m genesis complete — faucet pre-funded [3mfaucet[0m[2m=[0m11111111111111111111111111111111 [3mlamports[0m[2m=[0m1000000000000000
+[2m2026-05-31T16:52:14.444087Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m sequencer started
+[2m2026-05-31T16:52:14.446407Z[0m [32m INFO[0m [2mclutch::sequencer::sequencer[0m[2m:[0m sequencer started [3mblock_interval_secs[0m[2m=[0m3 [3mmax_txs_per_block[0m[2m=[0m100 [3mblocks_per_batch[0m[2m=[0m3
+[2m2026-05-31T16:52:14.494478Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m batch submitter started (L1 = https://api.devnet.solana.com)
+[2m2026-05-31T16:52:14.495496Z[0m [32m INFO[0m [2mclutch::batch::batch[0m[2m:[0m batch submitter listening for batches
+[2m2026-05-31T16:52:14.501746Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m 
+[2m2026-05-31T16:52:14.501985Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ╔══════════════════════════════════════════════╗
+[2m2026-05-31T16:52:14.503109Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ║         Clutch Rollup Node  — Ready          ║
+[2m2026-05-31T16:52:14.503331Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ╠══════════════════════════════════════════════╣
+[2m2026-05-31T16:52:14.503369Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ║  RPC    http://localhost:8899               ║
+[2m2026-05-31T16:52:14.504404Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ║  DB     ./demo_db                            ║
+[2m2026-05-31T16:52:14.504453Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m ╚══════════════════════════════════════════════╝
+[2m2026-05-31T16:52:14.504472Z[0m [32m INFO[0m [2mclutch[0m[2m:[0m 

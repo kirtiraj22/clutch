@@ -9,6 +9,11 @@ use serde_json::Value;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use tokio::sync::RwLock;
 use tracing::{info, instrument};
+use crate::types::transaction::{
+    L2Transaction,
+    TransactionKind,
+    TxStatus,
+};
 
 use crate::{
     mempool::Mempool,
@@ -59,6 +64,8 @@ pub trait RollupRpc {
     async fn get_transaction_receipt(&self, tx_id: String) -> RpcResult<Option<Value>>;
     #[method(name = "clutch_getMetrics")]
     async fn get_metrics(&self) -> RpcResult<Value>;
+    #[method(name = "clutch_devSpamTx")]
+    async fn dev_spam_tx(&self, count: Option<u64>) -> RpcResult<Value>;
 }
 
 pub struct RollupRpcImpl {
@@ -146,6 +153,46 @@ impl RollupRpcServer for RollupRpcImpl {
         }
         info!(tx_id = %tx_id, "transaction accepted");
         Ok(tx_id)
+    }
+    
+    async fn dev_spam_tx(&self, count: Option<u64>) -> RpcResult<Value> {
+    use chrono::Utc;
+    use solana_sdk::pubkey::Pubkey;
+
+    use crate::types::transaction::{
+        L2Transaction,
+        TransactionKind,
+        TxStatus,
+    };
+
+    let total = count.unwrap_or(5);
+
+    for i in 0..total {
+        let tx = L2Transaction {
+            id: format!("devtx-{}", i),
+
+            from: Pubkey::default(),
+
+            kind: TransactionKind::Transfer {
+                to: Pubkey::new_unique(),
+                lamports: 1000 + i,
+            },
+
+            nonce: i,
+
+            received_at: Utc::now(),
+
+            raw: vec![1, 2, 3, 4],
+
+            status: TxStatus::Pending,
+        };
+
+        let _ = self.mempool.accept(tx).await;
+    }
+
+    Ok(serde_json::json!({
+        "inserted": total
+    }))
     }
 
     async fn get_latest_blockhash(&self, _config: Option<Value>) -> RpcResult<Value> {
